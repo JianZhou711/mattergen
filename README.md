@@ -40,29 +40,12 @@ source .venv/bin/activate
 uv pip install -e .
 ```
 
-Note that our datasets and model checkpoints are provided inside this repo via [Git Large File Storage (LFS)](https://git-lfs.com/). To find out whether LFS is installed on your machine, run
+Note that our datasets and model checkpoints are provided inside this repo via [Git Large File Storage (LFS)](https://git-lfs.com/).
+To find out whether LFS is installed on your machine, run
 ```bash
 git lfs --version
 ```
 If this prints some version like `git-lfs/3.0.2 (GitHub; linux amd64; go 1.18.1)`, you can skip the following step.
-
-### Apple Silicon
-> [!WARNING]
-> Running MatterGen on Apple Silicon is **experimental**. Use at your own risk.  
-> Further, you need to run `export PYTORCH_ENABLE_MPS_FALLBACK=1` before any training or generation run.
-
-To install the environment for Apple Silicon, run these commands:
-```bash
-cp pyproject.toml pyproject.linux.toml
-mv pyproject_apple_silicon.toml pyproject.toml
-pip install uv
-uv venv .venv --python 3.10 
-source .venv/bin/activate
-uv pip install -e .
-export PYTORCH_ENABLE_MPS_FALLBACK=1  # required to run MatterGen on Apple Silicon
-```
-
-
 
 ### Install Git LFS
 If Git LFS was not installed before you cloned this repo, you can install it via:
@@ -70,6 +53,11 @@ If Git LFS was not installed before you cloned this repo, you can install it via
 sudo apt install git-lfs
 git lfs install
 ```
+
+### Apple Silicon
+> [!WARNING]
+> Running MatterGen on Apple Silicon is **experimental**. Use at your own risk.  
+> Further, you need to run `export PYTORCH_ENABLE_MPS_FALLBACK=1` before any training or generation run.
 
 ## Get started with a pre-trained model
 We provide checkpoints of an unconditional base version of MatterGen as well as fine-tuned models for these properties:
@@ -82,7 +70,10 @@ We provide checkpoints of an unconditional base version of MatterGen as well as 
 * `dft_mag_density_hhi_score`: fine-tuned model jointly conditioned on magnetic density from DFT and HHI score
 * `chemical_system_energy_above_hull`: fine-tuned model jointly conditioned on chemical system and energy above hull from DFT
 
-The checkpoints are located at `checkpoints/<model_name>` and are also available on [Hugging Face](https://huggingface.co/microsoft/mattergen). 
+The checkpoints are located at `checkpoints/<model_name>` and are also available on [Hugging Face](https://huggingface.co/microsoft/mattergen). By default, they are downloaded from Huggingface when requested. You can also manually download them from Git LFS via 
+```bash
+git lfs pull -I checkpoints/<model_name> --exclude="" 
+```
 
 > [!NOTE]
 > The checkpoints provided were re-trained using this repository, i.e., are not identical to the ones used in the paper. Hence, results may slightly deviate from those in the publication. 
@@ -153,6 +144,43 @@ This script will try to read structures from disk in the following precedence or
 * If `$RESULTS_PATH` points to a directory, it will read all `.cif`,  `.xyz`, or `.extxyz` files in the order they occur in `os.listdir`.
 
 Here, we expect `energies.npy` to be a numpy array with the entries being `float` energies in the same order as the structures read from `$RESULTS_PATH`.
+
+### Evaluate using your own reference dataset
+
+> [!IMPORTANT]
+> If you are planning to use MatterSim to evaluate the stability of the generated structures, then the reference dataset you provide must contain energies
+> that are compatible with MatterSim, meaning they should be either DFT-computed energies calculated according to the Materials Project Compatbility scheme,
+> or energies directly computed with MatterSim.
+
+If you want to use your own custom dataset for evaluation, you first need to serialize and save it by doing so:
+
+``` python
+from mattergen.evaluation.reference.reference_dataset import ReferenceDataset
+from mattergen.evaluation.reference.reference_dataset_serializer import LMDBGZSerializer
+
+
+reference_dataset = ReferenceDataset.from_entries(name="my_reference_dataset", entries=entries)
+LMDBGZSerializer().serialize(reference_dataset, "path_to_file.gz")
+```
+
+where `entries` is a list of `pymatgen.entries.computed_entries.ComputedStructureEntry` objects containing structure-energy pairs for each structure.
+
+By default, we apply the MaterialsProject2020Compatibility energy correction scheme to all input structures during evaluation, and assume that the reference dataset 
+has already been pre-processed using the same compatibility scheme. Therefore, unless you have already done this, you should obtain the `entries` object for
+your custom reference dataset in the following way:
+
+``` python
+from mattergen.evaluation.utils.vasprunlike import VasprunLike
+from pymatgen.entries.compatibility import MaterialsProject2020Compatibility
+
+entries = []
+for structure, energy in zip(structures, energies)
+  vasprun_like = VasprunLike(structure=structure, energy=energy)
+  entries.append(vasprun_like.get_computed_entry(
+      inc_structure=True, energy_correction_scheme=MaterialsProject2020Compatibility()
+  ))
+```
+
 ## Train MatterGen yourself
 Before we can train MatterGen from scratch, we have to unpack and preprocess the dataset files.
 
@@ -243,7 +271,7 @@ mattergen-finetune adapter.pretrained_name=$MODEL_NAME data_module=mp_20 +lightn
 
 #### Fine-tune on your own property data
 You may also fine-tune MatterGen on your own property data. Essentially what you need is a property value (typically `float`) for a subset of the data you want to train on (e.g., `alex_mp_20`). Proceed as follows:
-1. Add the name of your property to the `PROPERTY_SOURCE_IDS` list inside [`mattergen/mattergen/common/utils/globals.py`](mattergen/mattergen/common/utils/globals.py).
+1. Add the name of your property to the `PROPERTY_SOURCE_IDS` list inside [`mattergen/common/utils/globals.py`](mattergen/common/utils/globals.py).
 2. Add a new column with this name to the dataset(s) you want to train on, e.g., `datasets/alex_mp_20/train.csv` and `datasets/alex_mp_20/val.csv` (requires you to have followed the [pre-processing steps](#pre-process-a-dataset-for-training)).
 3. Re-run the CSV to dataset script `csv-to-dataset --csv-folder datasets/<MY_DATASET>/ --dataset-name <MY_DATASET> --cache-folder datasets/cache`, substituting your dataset name for `MY_DATASET`.
 4. Add a `<your_property>.yaml` config file to [`mattergen/conf/lightning_module/diffusion_module/model/property_embeddings`](mattergen/conf/lightning_module/diffusion_module/model/property_embeddings). If you are adding a float-valued property, you may copy an existing configuration, e.g., [`dft_mag_density.yaml`](mattergen/conf/lightning_module/diffusion_module/model/property_embeddings/dft_mag_density.yaml). More complicated properties will require you to create your own custom `PropertyEmbedding` subclass, e.g., see the [`space_group`](mattergen/conf/lightning_module/diffusion_module/model/property_embeddings/space_group.yaml) or [`chemical_system`](mattergen/conf/lightning_module/diffusion_module/model/property_embeddings/chemical_system.yaml) configs.
