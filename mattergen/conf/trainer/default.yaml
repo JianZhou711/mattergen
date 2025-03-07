@@ -12,14 +12,14 @@ strategy:
   _target_: pytorch_lightning.strategies.ddp.DDPStrategy
   find_unused_parameters: true
   
-logger:
-  _target_: pytorch_lightning.loggers.WandbLogger
-  project: crystal-generation
-  job_type: train
-  settings:
-    _target_: wandb.Settings
-    start_method: fork
-    _save_requirements: False
+#logger:
+#  _target_: pytorch_lightning.loggers.WandbLogger
+#  project: crystal-generation
+#  job_type: train
+#  settings:
+#    _target_: wandb.Settings
+#    start_method: fork
+#    _save_requirements: False
 
 callbacks:
   - _target_: pytorch_lightning.callbacks.LearningRateMonitor
